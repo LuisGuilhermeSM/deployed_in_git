@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { margin:0; font-family: sans-serif; }
+  #video { width:100%; border-radius:12px; background:#000; }
+  #canvas { display:none; }
+  #shoot {
+    width:100%; padding:14px; margin-top:10px; border:none; border-radius:10px;
+    background:#00BCFF; color:#10384F; font-weight:700; font-size:1rem; cursor:pointer;
+  }
+  #status { color:#a00; font-size:0.85rem; margin-top:6px; }
+</style>
+</head>
+<body>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+  <button id="shoot">📸 Capturar</button>
+  <div id="status"></div>
+
+<script>
+  // Protocolo minimo de Streamlit Components via postMessage (sem lib npm)
+  function sendMessage(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), "*");
+  }
+  function setFrameHeight() {
+    sendMessage("streamlit:setFrameHeight", { height: document.body.scrollHeight });
+  }
+  function setValue(value) {
+    sendMessage("streamlit:setComponentValue", { value, dataType: "json" });
+  }
+  sendMessage("streamlit:componentReady", { apiVersion: 1 });
+  window.addEventListener("load", setFrameHeight);
+
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const shootBtn = document.getElementById("shoot");
+  const status = document.getElementById("status");
+  let imageCapture = null; // usado quando o navegador suporta captura em resolução total do sensor
+
+  async function startCamera() {
+    // ideal bem acima do que qualquer sensor de celular oferece: forca o navegador a escolher a maior resolucao disponivel
+    const videoConstraintsAltaRes = {
+      facingMode: { exact: "environment" },
+      width: { ideal: 4096 },
+      height: { ideal: 2160 },
+    };
+    try {
+      // forca a camera traseira; "exact" falha em devices sem 2a camera
+      video.srcObject = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraintsAltaRes, audio: false,
+      });
+    } catch (e) {
+      try {
+        video.srcObject = await navigator.mediaDevices.getUserMedia({
+          video: { ...videoConstraintsAltaRes, facingMode: "environment" }, audio: false,
+        });
+      } catch (e2) {
+        status.textContent = "Não foi possível acessar a câmera: " + e2.message;
+        return;
+      }
+    }
+    setFrameHeight();
+
+    const track = video.srcObject.getVideoTracks()[0];
+    if (window.ImageCapture && track) {
+      try {
+        imageCapture = new ImageCapture(track);
+      } catch (e) {
+        imageCapture = null;
+      }
+    }
+  }
+  startCamera();
+
+  // o video comeca com altura 0; recalcula quando o stream define suas dimensoes reais
+  video.addEventListener("loadedmetadata", setFrameHeight);
+  video.addEventListener("playing", setFrameHeight);
+
+  function capturarViaCanvas() {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    setValue(canvas.toDataURL("image/jpeg", 0.95)); // data:image/jpeg;base64,...
+  }
+
+  shootBtn.addEventListener("click", async () => {
+    // ImageCapture.takePhoto() usa o pipeline de foto do sensor (maior resolucao/qualidade que o frame de video)
+    if (imageCapture) {
+      try {
+        const blob = await imageCapture.takePhoto();
+        const reader = new FileReader();
+        reader.onloadend = () => setValue(reader.result);
+        reader.readAsDataURL(blob);
+        return;
+      } catch (e) {
+        // segue para o fallback via canvas abaixo
+      }
+    }
+    if (!video.videoWidth) return;
+    capturarViaCanvas();
+  });
+</script>
+</body>
+</html>
